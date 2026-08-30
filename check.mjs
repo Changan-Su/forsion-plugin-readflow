@@ -14,6 +14,10 @@
  *   dispose 后队列真停(P1:不再起新 run/不再写盘/拒入队)· askStr 外点关闭必 settle(P1:
  *   含在飞 click 吞除与 disposer settle)· 索引读失败/损坏绝不静默截断(.bak 备份+拒写)·
  *   setFmField 块标量续行吞除 · reader 订阅 index 事件(静态绊线)· icon 词表 includes 化。
+ * 双语复核轮补钉(20260814 i18n fix round):
+ *   引擎层兜底错误必须走词表(真起一趟 run 吃 500,断言中文宿主下拿到中文句)· new Error 禁字面量 ·
+ *   t()/errKey/warnKey 调用点审计(键集合相等挡不住打错键)· 磁盘契约常量钉字面值 ·
+ *   兜底标题不随语言变(en 宿主下落盘仍是「未命名文章」)· zh→en→zh 往返回归。
  * 跑法:node check.mjs
  */
 process.env.TZ = 'Asia/Shanghai' // 日期断言自钉时区(指南纪律)
@@ -42,7 +46,10 @@ A.ok(!/insertAdjacentHTML|outerHTML|document\.write/.test(src), '禁 insertAdjac
 // P1 竞态绊线:reader 里对文章文件的读写必须走路径快照,直用 cur.path 会跨 await 被 openPath 改写,
 // 最坏把 A 全文构造的文本写进 B(B 被整体覆盖)
 A.ok(!/readFile\(cur\.path\)|writeFile\(cur\.path/.test(src), '文章文件读写不许直用 cur.path(须先快照 const path = cur.path)')
-A.ok(/upsertSection\(t, '## AI 摘要', demoteH2\(/.test(src), '摘要落盘必须先 demoteH2(模型自带 ## 标题会截断节)')
+A.ok(/upsertSection\(txt, '## AI 摘要', demoteH2\(/.test(src), '摘要落盘必须先 demoteH2(模型自带 ## 标题会截断节)')
+// 用户看得见的错误句一律 t('key'):写死字面量 = 有一种语言的用户永远看到另一种语言的话
+// (1.1.0 在引擎层踩过:五句兜底被改成硬编码英文,中文用户抓取失败时看到英文)
+A.ok(!/new Error\(\s*['"`]/.test(src), "new Error 不许直接吃字符串字面量,人话一律走 t('key')")
 // reader 必须订阅 index 事件:library 右键改状态后,本篇头部状态胶囊/流转按钮不许显示旧状态
 A.ok(/e\.type === 'index' && cur\) guard\(refreshFile\)\(\)/.test(src), 'reader 的 bus 处理必须响应 index 事件刷新当前篇')
 A.ok(/buildArticleText\(fm, neutralizeReservedHeadings\(body\)\)/.test(src), '抓取正文落盘必须先中和保留节头(对抗性注入)')
@@ -51,10 +58,17 @@ for (const m of src.matchAll(/\.innerHTML\s*=\s*`([^`]*)`/gs)) A.ok(!m[1].includ
 
 // ── manifest / space 契约 ─────────────────────────────────────────────────────
 A.equal(manifest.id, 'readflow'); A.equal(manifest.name, '稍后读')
-A.equal(manifest.version, '1.0.0'); A.equal(manifest.apiVersion, 1); A.equal(manifest.main, 'main.js')
+A.equal(manifest.version, '1.2.0'); A.equal(manifest.apiVersion, 1); A.equal(manifest.main, 'main.js')
 A.ok(!manifest.fileExtensions, '文章是普通笔记,不许声明自定义扩展')
 A.ok(manifest.onboarding && manifest.onboarding.settings === true, 'onboarding 应内嵌设置')
 A.ok(!manifest.onboarding.recommends, 'onboarding 禁止 recommends 自家内容')
+// manifest 双语字段:中文 canonical 之外必须另有一套英文(旧宿主忽略,不影响加载)
+A.ok(manifest.nameEn && !/[一-鿿]/.test(manifest.nameEn), 'manifest 必须有纯英文 nameEn')
+A.ok(manifest.descriptionEn && !/[一-鿿]/.test(manifest.descriptionEn), 'manifest 必须有纯英文 descriptionEn')
+A.ok(manifest.onboarding.en && manifest.onboarding.en.intro && !/[一-鿿]/.test(manifest.onboarding.en.intro), 'onboarding.en.intro 必须是纯英文')
+A.equal(manifest.onboarding.en.steps.length, manifest.onboarding.steps.length, 'onboarding.en.steps 必须与中文一一对应(同序同数)')
+for (const s of manifest.onboarding.en.steps) A.ok(s.title && s.description && !/[一-鿿]/.test(s.title + s.description), `onboarding.en step 必须是纯英文:${s.title}`)
+A.ok(space.name && space.name.zh && space.name.en, 'space 名必须双语')
 A.deepEqual(space.requires.views.sort(), ['plugin:readflow:library', 'plugin:readflow:reader'], 'space 应声明两个插件视图')
 // 宿主 userSpaces.tsx SPACE_ICONS 词表拷贝(icon 不在表内会静默回退 Boxes 通用图标)。
 // SPEC 点名的 bookmark 不在表内,故用 book-open(有据偏离);词表若扩了 bookmark,可改回并同步此拷贝。
@@ -102,17 +116,19 @@ globalThis.localStorage = { getItem: (k) => (_ls.has(k) ? _ls.get(k) : null), se
 
 // ── mock ctx + 内存 vault ─────────────────────────────────────────────────────
 const V = new Map(); const writes = []
-const reg = { views: [], commands: [], settings: [], status: [] }
+const reg = { views: [], commands: [], settings: [], status: [], listSources: [] }
 const sbUpdates = []; const activityEvents = []; const opened = []; const notes = []
+const navLoaded = []; const navOpened = [] // R1/R2:ctx.app.loadPage / ctx.app.openFile 的调用账本
 const ctx = {
   registerView: (v) => reg.views.push(v),
   registerCommand: (c) => reg.commands.push(c),
   registerSetting: (s) => reg.settings.push(s),
   registerStatusItem: (s) => { reg.status.push(s); return { update: (p) => sbUpdates.push(p), dispose() {} } },
+  registerListSource: (x) => reg.listSources.push(x), // 统一左栏数据源(宿主 2026-08-25+)
   notify: (m, o) => notes.push({ m: String(m), o }), openView: (v) => opened.push(v),
   activity: { log: (event, detail) => activityEvents.push({ event, detail }) },
   app: {
-    notify() {}, openFile() {},
+    notify() {}, openFile: (p) => navOpened.push(p), loadPage: (p) => navLoaded.push(p),
     prompt: async () => '',
     workFolder: () => '稍后读',
     readFile: async (p) => (V.has(p) ? V.get(p) : null),
@@ -249,6 +265,17 @@ const t1 = T.buildArticleText(FM0, '正文第一段\n\n第二段')
   A.ok(T.stripSections(withSum, ['## AI 摘要']).trim() === '正文段', '阅读区剥摘要节不留残渣')
   A.equal(T.neutralizeReservedHeadings('正文\n## 划线\n> 假引文\n ## AI 摘要 \n## 正常标题'),
     '正文\n### 划线\n> 假引文\n ### AI 摘要 \n## 正常标题', '只中和与保留节头同名的行,正常 H2 原样')
+}
+
+// ── 磁盘契约常量钉死字面值(改名 = 同一篇笔记两套节头,旧划线/摘要读不回来) ────────────
+{
+  A.equal(T.H_HIGHLIGHT, '## 划线', '划线节头是磁盘契约,永不改名、永不翻译')
+  A.equal(T.H_SUMMARY, '## AI 摘要', '摘要节头是磁盘契约(genSummary 里还有一处同值字面量,改名要一起改)')
+  A.deepEqual(T.RESERVED_HEADINGS, ['## 划线', '## AI 摘要'])
+  A.equal(T.DEFAULT_FOLDER, '稍后读', '工作文件夹兜底名不随语言变')
+  A.equal(T.UNTITLED_TITLE, '未命名文章', '兜底标题会进 rf_title 与文件名 slug,必须是常量')
+  A.ok(!/t\(\s*'untitled'/.test(src), "兜底标题不许走 t()(会让落盘文件名随界面语言变)")
+  A.equal(T.domainOf('https:///a'), '', '无 host 的 URL 取不到域名 → 兜底标题这条路真可达(不是死代码)')
 }
 
 // ── ```article 块解析 + 失败分类 ──────────────────────────────────────────────
@@ -530,6 +557,27 @@ A.equal(T.onColorOf([28, 28, 28]), '#ffffff', '炭黑强调色上给白字')
   A.ok(ok && ok.fm.rf_title, '恢复后正常可读')
 }
 
+// ── 引擎层兜底错误必须走词表(1.1.1 回归钉:曾被写死英文,中文用户抓取失败看到英文句) ─────
+// 这五句(起 run 失败 / 无 runId / 订阅失败 / 任务失败 / 连接中断)经 e_raw 的 {msg} 一路流回
+// 队列失败行与「抓取失败(fetch_error):…」toast,是用户看得见的人话,不是内部日志。
+{
+  const seen = []
+  globalThis.window = { tangu: { getConfig: async () => ({ backendUrl: 'http://fake.local', token: 'tok' }) } }
+  globalThis.fetch = async (url) => { seen.push(String(url)); return { ok: false, status: 500, text: async () => '' } }
+  const url = 'https://enginefail.example/a'
+  A.equal(T.qAdd(url).ok, true)
+  await new Promise((r) => setTimeout(r, 60))
+  const it = T.queue.items.find((i) => i.url === url)
+  A.equal(it.status, 'failed', '引擎 500 应落失败态')
+  A.equal(it.errType, 'fetch_error')
+  A.ok(it.error.includes('HTTP 500'), `兜底句应带上状态码:${it.error}`)
+  A.ok(/[一-鿿]/.test(it.error), `默认(中文)宿主下引擎兜底错误必须是中文,不许写死英文:${it.error}`)
+  A.equal(seen.length, 1, '起 run 就 500,不该再去订阅事件流')
+  T.qRemove(it.id) // 收干净,别把下面 dispose 那趟的 fetches 计数带偏
+  delete globalThis.fetch
+  delete globalThis.window
+}
+
 // ── P1 钉:dispose 后队列真停(不再起新 run / 不再写盘 / 拒绝入队) ────────────────
 {
   const fetches = []
@@ -595,7 +643,198 @@ A.equal(T.onColorOf([28, 28, 28]), '#ffffff', '炭黑强调色上给白字')
   A.equal(s2, true, '插件 dispose 时挂着的 askStr 必须被 settle,不许留永久挂起的 await')
 }
 
+// ── 双语①:MSG 两侧键集合必须完全相等(漏翻一条就红) ─────────────────────────────
+let MSG_KEYS = 0
+{
+  A.ok(T.MSG && T.MSG.zh && T.MSG.en, 'main.js 必须导出 MSG 词表')
+  MSG_KEYS = Object.keys(T.MSG.zh).length
+  const zh = Object.keys(T.MSG.zh).sort(), en = Object.keys(T.MSG.en).sort()
+  A.deepEqual(en, zh, `MSG 两侧键集合必须完全相等(zh 独有 ${zh.filter((k) => !en.includes(k))} / en 独有 ${en.filter((k) => !zh.includes(k))})`)
+  A.ok(zh.length >= 60, `词表太小(${zh.length} 条),UI 文案八成还有硬编码没接进来`)
+  for (const k of zh) {
+    A.ok(String(T.MSG.zh[k]).length > 0, `zh.${k} 不许空串`)
+    A.ok(String(T.MSG.en[k]).length > 0, `en.${k} 不许空串`)
+    A.ok(!/[一-鿿]/.test(String(T.MSG.en[k])), `en.${k} 里有中文:${T.MSG.en[k]}`)
+    // 占位符两侧必须同套,否则英文句里会留下没替换的 {n}
+    const ph = (s) => (String(s).match(/\{[a-z]+\}/g) || []).sort().join(',')
+    A.equal(ph(T.MSG.en[k]), ph(T.MSG.zh[k]), `占位符两侧不一致:${k}`)
+  }
+  // 中文侧没被「为了过门禁」掏空:界面构件在默认(无 getLocale)宿主下仍然出中文
+  A.ok(T.buildEmptyTip('inbox').textContent.includes('收件箱'), '默认宿主(无 getLocale)必须仍是中文界面')
+  A.equal(T.statusLabel('reading'), '在读')
+}
+
+// ── 双语①-b:调用点审计 ───────────────────────────────────────────────────────
+// 键集合相等只挡「翻漏一条」,挡不住 t('typo_key'):那种情况两侧都渲染出原始 key,
+// CJK 残留检查看不见、真机 e2e 也看不见(英文界面下一个裸 key 本来就没有中文)。
+{
+  const defined = new Set(Object.keys(T.MSG.zh)) // 两侧键集合已断言相等,查一侧即可
+  // ① 字面量调用点 t('key'(以 , 或 ) 收尾;t('st_' + s) 这类拼接被这条规则自然排除)
+  const used = [...src.matchAll(/(?<![.\w])t\(\s*'([a-z0-9_]+)'\s*[,)]/g)].map((m) => m[1])
+  A.ok(used.length >= 100, `t() 字面量调用点只扫到 ${used.length} 处,正则八成失灵了`)
+  const miss = [...new Set(used)].filter((k) => !defined.has(k))
+  A.deepEqual(miss, [], `t() 引用了词表里没有的键(打错键=两侧都渲染裸 key):${miss}`)
+  // ② 「存钥匙不存句子」的动态路径:errKey / warnKey 一律是这四个前缀的字面量
+  const dyn = [...new Set([...src.matchAll(/'((?:w_|q_|e_|err_)[a-z0-9_]*)'/g)].map((m) => m[1]))]
+  A.ok(dyn.length >= 20, `errKey/warnKey 字面量只扫到 ${dyn.length} 个,正则八成失灵了`)
+  const dynMiss = dyn.filter((k) => !defined.has(k))
+  A.deepEqual(dynMiss, [], `errKey/warnKey 引用了词表里没有的键(队列行会渲染裸 key):${dynMiss}`)
+  // ③ 拼接键 t('st_' + s):STATUS_ORDER 每个状态都得有对应键
+  for (const s of T.STATUS_ORDER) A.ok(defined.has('st_' + s), `状态 ${s} 缺 st_ 键(statusLabel 会渲染裸 key)`)
+}
+
+// ── 双语②:mock ctx 的 getLocale 返回 'en' 时,真构件渲染出英文串 ────────────────
+{
+  const reg3 = { views: [], commands: [], settings: [] }
+  const localeSubs = []
+  let unsubbed = 0
+  const enCtx = {
+    registerView: (v) => reg3.views.push(v),
+    registerCommand: (c) => reg3.commands.push(c),
+    registerSetting: (s) => reg3.settings.push(s),
+    registerStatusItem: () => ({ update() {}, dispose() {} }),
+    notify() {}, openView() {},
+    getLocale: () => 'en',
+    subscribeLocale: (cb) => { localeSubs.push(cb); return () => { unsubbed++ } },
+    app: { notify() {}, openFile() {}, workFolder: () => '稍后读', readFile: async (p) => (V.has(p) ? V.get(p) : null), writeFile: async (p, txt) => { V.set(p, String(txt)) } },
+  }
+  globalThis.__READFLOW_TEST__ = {}
+  const disposeEn = new Function('ctx', src)(enCtx)
+  const E = globalThis.__READFLOW_TEST__
+  A.equal(localeSubs.length, 1, '必须订阅 ctx.subscribeLocale(不订阅=切语言时视图不会变)')
+
+  // 注册面(单字符串,取注册当时的语言)
+  A.equal(reg3.views.find((v) => v.id === 'library').title, 'Read Later', 'en 宿主下视图标题应为英文')
+  A.ok(!/[一-鿿]/.test(reg3.commands.map((c) => c.title).join(' ')), 'en 宿主下命令标题应为英文')
+  A.ok(!/[一-鿿]/.test(reg3.settings.map((s) => s.label + s.description).join(' ')), 'en 宿主下设置文案应为英文')
+
+  // 渲染面(真构件走 DOM 垫片):空栏提示 / 队列失败行 / 列表卡片
+  const tip = E.buildEmptyTip('inbox')
+  A.ok(tip.textContent.includes('inbox') || tip.textContent.includes('Inbox'), tip.textContent)
+  A.ok(!/[一-鿿]/.test(tip.textContent), `英文界面不许残留中文:${tip.textContent}`)
+  const row = E.buildQueueRow({ id: 'x', url: 'https://e.example/a', title: 'e.example', status: 'failed', errType: 'interrupted', errKey: 'q_interrupted', errVars: null, error: '上次抓取被中断,点击重试' }, {})
+  A.ok(row.textContent.includes('Retry'), row.textContent)
+  A.ok(row.textContent.includes('interrupted'), '失败原因也要跟着语言走(存钥匙不存句子)')
+  A.ok(!/[一-鿿]/.test(row.textContent), `队列行残留中文(八成是存了死句子):${row.textContent}`)
+  const card = E.buildArticleCard({ path: 'p.md', title: 'A plain title', url: 'https://x.example/a', minutes: 3, saved: '2026-08-01T00:00:00.000Z', status: 'inbox' }, {})
+  A.ok(card.textContent.includes('min read'), card.textContent)
+  A.ok(!/[一-鿿]/.test(card.textContent), `卡片残留中文(日期没走 en-US?):${card.textContent}`)
+  A.equal(E.statusLabel('archived'), 'Archived')
+  A.ok(!/[一-鿿]/.test(E.buildEmptyTip('done').textContent + E.buildEmptyTip('archived').textContent + E.buildEmptyTip('reading').textContent))
+  // 分类失败/中断恢复也应给英文(错误串是钥匙不是句子)
+  A.ok(!/[一-鿿]/.test(E.classifyArticle(null).error))
+  A.ok(!/[一-鿿]/.test(E.reviveQueue(JSON.stringify([{ id: 'z', url: 'https://r.example/p', status: 'pending' }]))[0].error))
+  // 发给模型的指令仍是纯英文,但作答语言随界面语言显式指定
+  A.ok(!/[一-鿿]/.test(E.summaryMessage('T', 'body')), 'en 侧摘要指令同样不许有中文')
+  A.ok(E.summaryMessage('T', 'body').includes('Respond in English.'), 'en 界面应要模型用英文作答')
+  A.ok(T.summaryMessage('T', 'body').includes('Respond in Chinese.'), 'zh 界面应要模型用中文作答')
+  // 数据契约绝不随语言变:节头/工作文件夹/frontmatter 值仍是原样
+  A.ok(E.appendHighlight('正文', 'quoted line', '').includes('## 划线'), '英文界面写回文件的节头必须仍是中文节头(磁盘契约)')
+  A.equal(E.folderRoot(), '稍后读', '工作文件夹不随语言变')
+  // 兜底标题(标题和域名都取不到时)同样是磁盘契约:文件名与 rf_title 不许随界面语言变
+  const nd = await E.saveArticle({ url: 'https:///a', title: '' }, '字'.repeat(400))
+  A.ok(nd.path.includes('未命名文章'), `en 界面下落盘文件名仍须用中文常量:${nd.path}`)
+  A.equal(E.parseFrontmatter(V.get(nd.path)).fm.rf_title, '未命名文章', 'en 界面下 rf_title 仍是磁盘常量')
+
+  disposeEn()
+  A.equal(unsubbed, 1, 'disposer 必须退掉语言订阅')
+}
+
+// ── 双语③:zh → en → zh 往返回归(真机 e2e 只单向切,回不去的话中文用户没人替他看) ──────
+{
+  let loc = 'zh'
+  const subs = [], sbUp = []
+  const reg4 = { views: [], commands: [], settings: [] }
+  const rtCtx = {
+    registerView: (v) => reg4.views.push(v),
+    registerCommand: (c) => reg4.commands.push(c),
+    registerSetting: (s) => reg4.settings.push(s),
+    registerStatusItem: () => ({ update: (p) => sbUp.push(p), dispose() {} }),
+    notify() {}, openView() {},
+    getLocale: () => loc,
+    subscribeLocale: (cb) => { subs.push(cb); return () => {} },
+    app: { notify() {}, openFile() {}, workFolder: () => '稍后读', readFile: async (p) => (V.has(p) ? V.get(p) : null), writeFile: async (p, txt) => { V.set(p, String(txt)) } },
+  }
+  globalThis.__READFLOW_TEST__ = {}
+  const disposeRt = new Function('ctx', src)(rtCtx)
+  const R = globalThis.__READFLOW_TEST__
+  await new Promise((r) => setTimeout(r, 0)) // 让启动那趟 readIndex().then(refreshStatusItem) 落地
+  A.ok(R.buildEmptyTip('inbox').textContent.includes('收件箱'), 'zh 起手应是中文')
+  A.ok(sbUp.length && sbUp[sbUp.length - 1].text.includes('稍后读'), 'zh 起手状态栏应是中文')
+
+  loc = 'en'; subs.forEach((f) => f())
+  A.ok(!/[一-鿿]/.test(R.buildEmptyTip('inbox').textContent), '切到 en:构件不许残留中文')
+  A.equal(R.statusLabel('reading'), 'Reading')
+  const en = sbUp[sbUp.length - 1]
+  A.ok(!/[一-鿿]/.test(en.text + en.title), `切到 en:状态栏不许残留中文:${JSON.stringify(en)}`)
+
+  loc = 'zh'; subs.forEach((f) => f())
+  A.ok(R.buildEmptyTip('inbox').textContent.includes('收件箱'), '切回 zh:空栏提示必须完整回归中文')
+  A.equal(R.statusLabel('reading'), '在读', '切回 zh:状态标签必须回归')
+  A.ok(R.buildArticleCard({ path: 'p.md', title: 'T', url: 'https://x.example/a', minutes: 3, saved: '2026-08-01T00:00:00.000Z', status: 'inbox' }, {}).textContent.includes('分钟'), '切回 zh:卡片估读时长必须回归中文')
+  const zh = sbUp[sbUp.length - 1]
+  A.ok(zh.text.includes('稍后读'), `切回 zh:状态栏必须回归中文:${JSON.stringify(zh)}`)
+  disposeRt()
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// [回归] 2026-08-21 生态级 P0-A:普通 .md 必须走 loadPage,不能走 openFile
+//   真源 amadeusNav.ts:215-217 —— openFile 对 !matchFileType(path) 的裸 .md 回落到
+//   amadeus.openVaultFile() = 交系统默认程序(TextEdit)。本插件 manifest 无 fileExtensions,
+//   产物全是裸 .md → 一定不命中。实证探针:/tmp/fip0821-review/main-openfile/probe-openfile.cjs
+// ══════════════════════════════════════════════════════════════════════════
+{
+  navLoaded.length = 0; navOpened.length = 0
+  A.equal(T.openNotePath('稍后读/2026-08-21-某文.md'), 'loadPage', 'R1 打开笔记必须走 loadPage')
+  A.deepEqual(navLoaded, ['稍后读/2026-08-21-某文.md'], 'R1 路径原样传给 loadPage')
+  A.equal(navOpened.length, 0, 'R1 一次都没调 ctx.app.openFile(会被系统默认程序抢走)')
+
+  const keep = ctx.app.loadPage
+  delete ctx.app.loadPage // 旧宿主没有 loadPage
+  navLoaded.length = 0; navOpened.length = 0
+  A.equal(T.openNotePath('稍后读/旧宿主.md'), 'openFile', 'R2 旧宿主才退回 openFile')
+  A.deepEqual(navOpened, ['稍后读/旧宿主.md'], 'R2 退回 openFile,不是干脆不打开')
+  ctx.app.loadPage = keep
+}
+
+// ── 统一左栏列表源(1.2.0):注册 + 订阅即重读 + 状态分组 + 搜索 ────────────────────
+// ⚠️ 「订阅即重读」是这条接缝的头号坑:插件在宿主**启动期**装载,那时活动库还没恢复,
+//    ctx.app.readFile 静默给 null → idxCache 定格为空,此后无人再喊它一声(青鸟 2026-08-28 实报)。
+{
+  const LS = reg.listSources.find((x) => x.id === 'library-list')
+  A.ok(LS, '应注册 library-list 列表源')
+  for (const id of ['library', 'reader']) {
+    A.equal(reg.views.find((v) => v.id === id).workspaceSource, 'library-list', `${id} 视图应声明 workspaceSource(裸源 id,宿主自己加 plugin: 前缀)`)
+  }
+  const idxKey = '稍后读/.readflow-index.json'
+  V.set(idxKey, JSON.stringify({ items: [
+    { path: '稍后读/a.md', url: 'https://a.example/x', title: '订阅后才读得到', status: 'inbox', saved: '2026-08-28T01:00:00.000Z', minutes: 5 },
+    { path: '稍后读/b.md', url: 'https://b.example/y', title: '已读那篇', status: 'done', saved: '2026-08-27T01:00:00.000Z', minutes: 9 },
+  ] }))
+  A.ok(!LS.items({}).some((r) => r.key === '稍后读/a.md'), '前提:此刻列表源还没读过这份新索引')
+  const off = LS.subscribe(() => {})
+  await new Promise((r) => setTimeout(r, 10))
+  const rows = LS.items({})
+  A.equal(rows.length, 2, 'subscribe() 必须触发一次重读,否则启动期读空的列表永远回不来')
+  A.equal(rows[0].hint, '2026-08-28', 'hint 取落库日期(语言中立,不进词表)')
+  A.equal(rows[0].icon, 'link', '行首图标走宿主词表键')
+  A.deepEqual(LS.items({ group: 'done' }).map((r) => r.key), ['稍后读/b.md'], '分组过滤按 status')
+  A.deepEqual(LS.items({ query: '已读' }).map((r) => r.key), ['稍后读/b.md'], '搜索匹配标题')
+  A.deepEqual(LS.items({ query: 'a.example' }).map((r) => r.key), ['稍后读/a.md'], '搜索也匹配 URL')
+  A.deepEqual(LS.groups().map((g) => [g.key, g.count]), [['inbox', 1], ['done', 1]], '分组=非空状态档,按 STATUS_ORDER 排')
+  A.equal(LS.groups()[0].title, '收件箱', '分组标签现取 t() → 跟着宿主语言走')
+  A.ok(LS.itemMenu({ key: '稍后读/a.md' }).length >= 3, '右键菜单应给状态流转/打开笔记/移出')
+  A.deepEqual(LS.itemMenu({ key: '不存在.md' }), [], '索引里没有的行不给菜单')
+  opened.length = 0
+  LS.open({ key: '稍后读/a.md' })
+  A.deepEqual(opened, ['reader'], 'open() 应把条目交给 reader 视图')
+  A.equal(typeof off, 'function', 'subscribe() 须返回退订函数')
+  off()
+}
+
 console.log(`check ok — ${reg.views.length} views / ${reg.commands.length} cmds / ${reg.settings.length} settings / ${reg.status.length} statusItem;`
   + 'slug重名+frontmatter往返+划线两况+article块解析+失败三态+队列防重入/中断恢复+Clip导入去重+XSS+旧宿主'
   + '+路径快照绊线+节边界防越狱+索引串行化+guard接rejection+icon词表'
-  + '+dispose队列真停+askStr外点settle+索引损坏保全+块标量续行+reader订阅index 全部断言通过')
+  + '+dispose队列真停+askStr外点settle+索引损坏保全+块标量续行+reader订阅index+统一左栏列表源'
+  + `+双语(词表 ${MSG_KEYS} 键两侧相等 · en 宿主下构件渲染英文 · 调用点审计 · 引擎兜底错误走词表`
+  + ' · 磁盘契约常量钉死 · zh→en→zh 往返回归) 全部断言通过')

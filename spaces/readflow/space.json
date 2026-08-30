@@ -1,8 +1,8 @@
 {
   "id": "readflow",
-  "name": { "zh": "稍后读", "en": "ReadFlow" },
+  "name": { "zh": "稍后读", "en": "Read Later" },
   "icon": "book-open",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "layout": {
     "main": [{ "type": "plugin:readflow:reader" }],
     "left": [{ "type": "plugin:readflow:library" }]

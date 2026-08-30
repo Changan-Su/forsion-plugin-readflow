@@ -1,12 +1,17 @@
 {
   "id": "readflow",
   "name": "稍后读",
-  "version": "1.0.0",
+  "nameEn": "Read Later",
+  "version": "1.2.0",
   "apiVersion": 1,
   "description": "稍后读工作台:贴一条文章链接,本机 Tangu 用 web_fetch 抓取正文,存成你笔记库里的普通 Markdown 笔记(落在插件工作文件夹,默认「稍后读」);干净的阅读视图里选中即划线(写回原文件「## 划线」节)、一键 AI 摘要(写回「## AI 摘要」节)与基于正文的问答;「消化仪式」把最老的未读置顶逼你读掉或归档;可一键把 Forsion Clip 剪藏登记进同一张待读列表(登记原文件,不搬家不复制)。数据全在本地笔记库,只有抓取与 AI 请求经由你已登录的 Forsion 引擎。",
+  "descriptionEn": "A read-later workbench: paste an article link and Tangu on this machine fetches the body with web_fetch, saving it as an ordinary Markdown note in your vault (inside the plugin work folder). In the clean reading view, select text to highlight it and generate an AI summary in one click - both are written back into their own sections of that same note - and ask questions grounded in the article. The digest ritual pins the oldest unread item so you either read it or archive it. Forsion Clip saves can be registered into the same reading list in one step; the original files stay where they are, nothing is moved or copied. All data lives in your local vault; only fetching and AI requests go through the Forsion engine you are already signed in to.",
   "main": "main.js",
   "events": [
-    { "name": "article_read", "label": "读完一篇文章" }
+    {
+      "name": "article_read",
+      "label": "读完一篇文章"
+    }
   ],
   "onboarding": {
     "intro": "稍后读把「回头再看」的链接变成库内可读、可划线、可问答的笔记。文章抓取与 AI 摘要走本机 Tangu 引擎,需要已登录 Forsion。",
@@ -24,6 +29,23 @@
         "description": "已有剪藏的话,跑命令「稍后读:导入 Forsion Clip 剪藏」,把剪藏文件夹里的 .md 登记进待读列表(原文件不动;文件夹名可在下方设置里改)。导入是手动触发的,不做实时监听。"
       }
     ],
-    "settings": true
+    "settings": true,
+    "en": {
+      "intro": "Read Later turns \"I'll get to it\" links into notes you can read, highlight and question inside your vault. Fetching and AI summaries run through Tangu on this machine, so you need to be signed in to Forsion.",
+      "steps": [
+        {
+          "title": "Add your first article",
+          "description": "Open the list from the command palette (Read Later: Open), or switch to the Read Later Space, then paste an article link and hit Add. The fetched body is saved into the plugin work folder; the article is a plain note, so full-text search and wiki links work on it as usual."
+        },
+        {
+          "title": "Actually read it",
+          "description": "Click any row to open the reading view: select text and hit the floating Highlight button to keep it, with an optional annotation. The side panel generates an AI summary and answers questions about the article. Press Done to finish the digest ritual. Highlights and summaries are written back into the note file."
+        },
+        {
+          "title": "Hook up Forsion Clip",
+          "description": "If you already have clips, run the command Read Later: Import Forsion Clip saves to register the .md files in the clip folder into the reading list. Originals are untouched, and the folder name is configurable in the settings below. Importing is manual - there is no live watcher."
+        }
+      ]
+    }
   }
 }
