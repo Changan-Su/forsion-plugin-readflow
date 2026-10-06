@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">Read Later — Saved page</title>
+  <!-- Original Forsion plugin identity artwork, 2026-10-05. -->
+  <defs><linearGradient id="tile" x1="28" y1="12" x2="222" y2="252" gradientUnits="userSpaceOnUse"><stop stop-color="#4a443e"/><stop offset="1" stop-color="#252322"/></linearGradient></defs>
+  <rect x="4" y="4" width="248" height="248" rx="58" fill="url(#tile)"/>
+  <g style="--ink:#fff7e8;--accent:#c7b7a1;--cut:#252322" fill="none" stroke="var(--ink)" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M121 78Q91 57 51 72V184Q91 170 121 191Z" fill="var(--ink)" stroke="none"/>
+    <path d="M135 78Q164 57 205 72V184Q164 170 135 191Z" fill="var(--ink)" stroke="none"/>
+    <path d="M160 64v57l14-10 14 10V64Z" fill="var(--accent)" stroke="none"/>
+    <path d="M72 101q12-1 26 5m-26 24q12-1 26 5m-26 24q12-1 26 5" stroke="var(--cut)" stroke-width="7"/>
+  </g>
+</svg>

@@ -2,6 +2,7 @@
   "id": "readflow",
   "name": { "zh": "稍后读", "en": "Read Later" },
   "icon": "book-open",
+  "iconFile": "icon.png",
   "version": "1.1.0",
   "layout": {
     "main": [{ "type": "plugin:readflow:reader" }],
